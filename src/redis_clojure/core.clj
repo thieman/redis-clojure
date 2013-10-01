@@ -4,8 +4,8 @@
 
 (def debug true)
 
-(declare conn-handler append-status-reply append-error-reply append-integer-reply
-         append-bulk-reply append-multi-bulk-reply append-complete-response)
+(declare conn-handler append-status-response append-error-response append-integer-response
+         append-bulk-response append-multi-bulk-response append-complete-response)
 
 (def responses (atom []))
 (def ^:private current-response (atom []))
@@ -40,9 +40,11 @@
       (Integer/parseInt)))
 
 (defn- bulk-is-complete? [response-parts]
-  (let [response-size (spec-int-from-response-part (first response-parts))
-        content (clojure.string/join (next response-parts))]
-    (= (+ 2 response-size) (count content))))
+  (if (= response-parts ["$-1\r\n"])
+    true
+    (let [response-size (spec-int-from-response-part (first response-parts))
+          content (clojure.string/join (next response-parts))]
+      (= (+ 2 response-size) (count content)))))
 
 (defn- consolidate-multi-bulk-args [args]
   (loop [args args
@@ -65,9 +67,10 @@
          args (next multi-args)]
     (if (zero? (count args))
       result
-      (let [current (if (<= 2 (count result)) (vec (butlast result)) [])]
+      (let [current (if (<= 2 (count result)) (vec (butlast result)) [])
+            next-arg-start (if (= "$-1\r\n" (first args)) ["$-1\r\n" nil] [(first args)])]
         (if (zero? (rem (count (last result)) 2))
-          (recur (conj result [(first args)]) (next args))
+          (recur (conj result next-arg-start) (next args))
           (recur (conj current (conj (last result) (first args))) (next args)))))))
 
 (defn- multi-bulk-is-complete? [response-parts]
@@ -102,29 +105,35 @@
         head (-> (drop-last 2 (next (first current)))
                  (clojure.string/join))]
     (condp = @response-type
-      :status (append-status-reply head)
-      :error (append-error-reply head)
-      :integer (append-integer-reply head)
-      :bulk (append-bulk-reply current)
-      :multi-bulk (append-multi-bulk-reply current))))
+      :status (append-status-response head)
+      :error (append-error-response head)
+      :integer (append-integer-response head)
+      :bulk (append-bulk-response current)
+      :multi-bulk (append-multi-bulk-response current))))
 
-(defn- append-status-reply [msg]
+(defn- append-status-response [msg]
   (append-complete-response {:type :status
-                             :value (msg)}))
+                             :value msg}))
 
-(defn- append-error-reply [msg]
+(defn- append-error-response [msg]
   (append-complete-response {:type :error
-                             :value (msg)}))
+                             :value msg}))
 
-(defn- append-integer-reply [msg]
+(defn- append-integer-response [msg]
   (append-complete-response {:type :integer
                              :value (Integer/parseInt msg)}))
 
-(defn- append-bulk-reply [msg]
-  (append-complete-response {:type :bulk
-                             :value (map (comp clojure.string/join (partial drop-last 2)) (next msg))}))
+(defn- append-bulk-response [msg]
+  (let [value (if (= msg ["$-1\r\n"])
+                nil
+                (-> (next msg)
+                    first
+                    ((partial drop-last 2))
+                    (clojure.string/join)))]
+    (append-complete-response {:type :bulk
+                               :value value})))
 
-(defn- append-multi-bulk-reply [msg]
+(defn- append-multi-bulk-response [msg]
   (let [value (map (comp clojure.string/join (partial drop-last 2)) (next msg))]
     (append-complete-response {:type :multi-bulk
                                :value (filter (complement nil?) (map-indexed #(if (odd? %1) %2 nil) value))})))
@@ -153,9 +162,3 @@
               (append-response-part curr-msg)
               (recur "")))
           (recur curr-msg))))))
-
-(defn -main []
-  (let [conn (connect "127.0.0.1" 6379)]
-    (println (synchronous-request conn (request-string "llen" "bacon")))
-    (println (synchronous-request conn (request-string "lrange" "bacon" 0 1)))))
-    ;; (println (synchronous-request conn (request-string "info")))))
