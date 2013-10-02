@@ -17,7 +17,7 @@
   (let [socket (Socket. host port)
         in (BufferedReader. (InputStreamReader. (.getInputStream socket)))
         out (PrintWriter. (.getOutputStream socket))
-        conn (ref {:in in :out out})]
+        conn (ref {:in in :out out :connection true})]
     (doto (Thread. #(conn-handler conn)) (.start))
     conn))
 
